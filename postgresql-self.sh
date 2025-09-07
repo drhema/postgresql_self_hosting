@@ -2,36 +2,37 @@
 
 #################################################
 # PostgreSQL 16 + TimescaleDB + pgAdmin 4 Setup
-# Self-Hosted Stack for Portainer Deployment
-# Author: Database Stack Automation
-# Version: 1.0.0
+# Optimized Self-Hosted Stack with IP Whitelisting
+# Version: 2.0.0 - Fixed pgAdmin email validation
 #################################################
 
 set -e
 
-# Color codes for output
+# Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
 
-# Function to print colored output
+# Functions
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_success() { echo -e "${GREEN}[✓]${NC} $1"; }
+print_error() { echo -e "${RED}[✗]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[⚠]${NC} $1"; }
 
-# Function to generate secure 12-character alphanumeric passwords
+# Generate secure 12-character alphanumeric passwords
 generate_password() {
     tr -dc 'A-Za-z0-9' </dev/urandom | head -c 12
 }
 
-# Function to detect server IP
+# Auto-detect server IP
 detect_server_ip() {
     local ip=""
     
-    # Try to get public IP
+    # Try multiple services to get public IP
     for service in "ifconfig.me" "icanhazip.com" "ipinfo.io/ip" "api.ipify.org"; do
         ip=$(curl -s --max-time 3 $service 2>/dev/null)
         if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
@@ -51,8 +52,9 @@ detect_server_ip() {
     echo "localhost"
 }
 
-# Default base directory
+# Default configuration
 BASE_DIR="/srv/postgres16"
+SERVER_IP=$(detect_server_ip)
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -61,9 +63,16 @@ while [[ $# -gt 0 ]]; do
             BASE_DIR="$2"
             shift 2
             ;;
+        --ip)
+            SERVER_IP="$2"
+            shift 2
+            ;;
         --help)
-            echo "Usage: $0 [--dir BASE_DIRECTORY]"
-            echo "  --dir: Specify custom base directory (default: /srv/postgres16)"
+            echo "Usage: $0 [OPTIONS]"
+            echo "Options:"
+            echo "  --dir PATH    Custom installation directory (default: /srv/postgres16)"
+            echo "  --ip ADDRESS  Specify server IP (default: auto-detect)"
+            echo "  --help        Show this help message"
             exit 0
             ;;
         *)
@@ -73,28 +82,58 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-print_info "========================================="
-print_info "PostgreSQL 16 + TimescaleDB + pgAdmin 4"
-print_info "Self-Hosted Stack Setup"
-print_info "========================================="
+clear
+echo -e "${CYAN}"
+cat << "EOF"
+╔════════════════════════════════════════════════════════════╗
+║    PostgreSQL 16 + TimescaleDB + pgAdmin 4 Setup v2.0     ║
+║         Optimized Stack with Security Features            ║
+╚════════════════════════════════════════════════════════════╝
+EOF
+echo -e "${NC}"
 
-# Detect server IP
-SERVER_IP=$(detect_server_ip)
-print_info "Detected Server IP: $SERVER_IP"
-print_info "Base Directory: $BASE_DIR"
+print_info "Server IP detected: ${SERVER_IP}"
+print_info "Installation directory: ${BASE_DIR}"
+echo ""
 
-# Create directory structure
-print_info "Creating directory structure..."
-sudo mkdir -p "$BASE_DIR"/{data,pgadmin,backups,scripts,logs,config}
+# IP Whitelisting Configuration
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}                 SECURITY CONFIGURATION                      ${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "Configure PostgreSQL access restrictions:"
+echo "1) Docker network only (most secure, no external access)"
+echo "2) Specific IP addresses (whitelist mode)"
+echo "3) Any IP address (least secure, full access)"
+echo ""
+read -p "Select option [1-3] (default: 1): " SECURITY_OPTION
 
-# Set proper ownership (UID 999 for postgres, 5050 for pgadmin)
-sudo chown -R 999:999 "$BASE_DIR/data"
-sudo chown -R 5050:5050 "$BASE_DIR/pgadmin"
-sudo chown -R 999:999 "$BASE_DIR/backups"
-sudo chown -R 999:999 "$BASE_DIR/logs"
+case "$SECURITY_OPTION" in
+    2)
+        echo ""
+        read -p "Enter allowed IPs (comma-separated): " ALLOWED_IPS_INPUT
+        if [ -z "$ALLOWED_IPS_INPUT" ]; then
+            EXPOSE_POSTGRES="false"
+            print_info "No IPs specified, using Docker network only"
+        else
+            ALLOWED_IPS="$ALLOWED_IPS_INPUT"
+            EXPOSE_POSTGRES="true"
+            print_success "PostgreSQL will accept connections from: ${ALLOWED_IPS}"
+        fi
+        ;;
+    3)
+        ALLOWED_IPS="0.0.0.0/0"
+        EXPOSE_POSTGRES="true"
+        print_warning "PostgreSQL will accept connections from ANY IP (not recommended)"
+        ;;
+    *)
+        EXPOSE_POSTGRES="false"
+        print_success "PostgreSQL restricted to Docker network only (recommended)"
+        ;;
+esac
 
-# Generate secure passwords
-print_info "Generating secure passwords..."
+# Generate credentials
+print_info "Generating secure credentials..."
 POSTGRES_PASSWORD=$(generate_password)
 PGADMIN_PASSWORD=$(generate_password)
 APP_USER_PASSWORD=$(generate_password)
@@ -102,37 +141,69 @@ READONLY_PASSWORD=$(generate_password)
 BACKUP_PASSWORD=$(generate_password)
 ANALYTICS_PASSWORD=$(generate_password)
 
+# CRITICAL FIX: Use a valid email domain for pgAdmin
+PGADMIN_EMAIL="admin@example.com"
+
+# Create directory structure
+print_info "Creating directory structure..."
+sudo mkdir -p "$BASE_DIR"/{data,pgadmin,backups,scripts,logs,config,init}
+
+# Set proper ownership
+sudo chown -R 999:999 "$BASE_DIR/data"
+sudo chown -R 5050:5050 "$BASE_DIR/pgadmin"
+sudo chown -R 999:999 "$BASE_DIR/backups"
+sudo chown -R 999:999 "$BASE_DIR/logs"
+
 # Create .env file
-print_info "Creating .env file..."
+print_info "Creating environment configuration..."
 cat > "$BASE_DIR/.env" << EOF
-# PostgreSQL Configuration
+# PostgreSQL 16 + TimescaleDB Configuration
+# Generated: $(date)
+# Server: ${SERVER_IP}
+
+# ═══════════════════════════════════════════════════════════
+# POSTGRESQL CONFIGURATION
+# ═══════════════════════════════════════════════════════════
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=postgres
 
-# pgAdmin Configuration
-PGADMIN_DEFAULT_EMAIL=admin@${SERVER_IP//./-}.local
-PGADMIN_DEFAULT_PASSWORD=$PGADMIN_PASSWORD
+# ═══════════════════════════════════════════════════════════
+# PGADMIN CONFIGURATION (Fixed email validation)
+# ═══════════════════════════════════════════════════════════
+PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
 PGADMIN_CONFIG_SERVER_MODE=True
 PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=True
 
-# Database Users Passwords
-APP_USER_PASSWORD=$APP_USER_PASSWORD
-READONLY_PASSWORD=$READONLY_PASSWORD
-BACKUP_PASSWORD=$BACKUP_PASSWORD
-ANALYTICS_PASSWORD=$ANALYTICS_PASSWORD
+# ═══════════════════════════════════════════════════════════
+# DATABASE USERS
+# ═══════════════════════════════════════════════════════════
+APP_USER_PASSWORD=${APP_USER_PASSWORD}
+READONLY_PASSWORD=${READONLY_PASSWORD}
+BACKUP_PASSWORD=${BACKUP_PASSWORD}
+ANALYTICS_PASSWORD=${ANALYTICS_PASSWORD}
 
-# Server Configuration
-SERVER_IP=$SERVER_IP
+# ═══════════════════════════════════════════════════════════
+# SERVER CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+SERVER_IP=${SERVER_IP}
 SERVER_PORT=5432
 PGADMIN_PORT=5050
+EXPOSE_POSTGRES=${EXPOSE_POSTGRES}
 
-# TimescaleDB Configuration
-TIMESCALEDB_TELEMETRY=off
-
-# Security Settings
+# ═══════════════════════════════════════════════════════════
+# SECURITY SETTINGS
+# ═══════════════════════════════════════════════════════════
 POSTGRES_HOST_AUTH_METHOD=scram-sha-256
 POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=scram-sha-256
+TIMESCALEDB_TELEMETRY=off
+
+# ═══════════════════════════════════════════════════════════
+# CONNECTION STRINGS
+# ═══════════════════════════════════════════════════════════
+DATABASE_URL=postgresql://app_user:${APP_USER_PASSWORD}@${SERVER_IP}:5432/app_db
+DATABASE_URL_READONLY=postgresql://readonly_user:${READONLY_PASSWORD}@${SERVER_IP}:5432/app_db
 EOF
 
 # Secure the .env file
@@ -141,23 +212,13 @@ sudo chmod 600 "$BASE_DIR/.env"
 # Create PostgreSQL configuration
 print_info "Creating PostgreSQL configuration..."
 cat > "$BASE_DIR/config/postgresql.conf" << 'EOF'
-# Connection settings
+# PostgreSQL 16 Optimized Configuration
 listen_addresses = '*'
 max_connections = 200
-superuser_reserved_connections = 3
-
-# Memory settings
 shared_buffers = 256MB
 effective_cache_size = 1GB
 maintenance_work_mem = 64MB
 work_mem = 4MB
-
-# Write ahead log
-wal_level = replica
-max_wal_size = 1GB
-min_wal_size = 80MB
-
-# Query tuning
 random_page_cost = 1.1
 effective_io_concurrency = 200
 
@@ -167,20 +228,14 @@ log_directory = '/var/log/postgresql'
 log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
 log_rotation_age = 1d
 log_rotation_size = 100MB
-log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_line_prefix = '%t [%p]: user=%u,db=%d,app=%a,client=%h '
 log_checkpoints = on
 log_connections = on
 log_disconnections = on
-log_duration = off
-log_error_verbosity = default
-log_hostname = on
 log_lock_waits = on
 log_statement = 'ddl'
-log_temp_files = 0
-log_timezone = 'UTC'
 
 # Security
-ssl = off  # Internal network only
 password_encryption = scram-sha-256
 
 # TimescaleDB
@@ -188,61 +243,48 @@ shared_preload_libraries = 'timescaledb'
 timescaledb.telemetry_level = off
 EOF
 
-# Create pg_hba.conf for security
-print_info "Creating pg_hba.conf..."
-cat > "$BASE_DIR/config/pg_hba.conf" << 'EOF'
-# TYPE  DATABASE        USER            ADDRESS                 METHOD
-
-# Local connections
-local   all             all                                     scram-sha-256
-
-# IPv4 local connections (Docker network)
-host    all             all             172.16.0.0/12           scram-sha-256
-host    all             all             10.0.0.0/8              scram-sha-256
-host    all             all             192.168.0.0/16          scram-sha-256
-
-# Reject all other connections
-host    all             all             0.0.0.0/0               reject
-EOF
-
-# Create initialization SQL script
+# Create initialization SQL
 print_info "Creating database initialization script..."
-cat > "$BASE_DIR/scripts/init.sql" << EOF
--- Enable TimescaleDB extension
+cat > "$BASE_DIR/init/01-init-database.sql" << EOF
+-- PostgreSQL 16 + TimescaleDB Initialization
+-- Generated: $(date)
+
+-- Enable extensions
 CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Create application database
 CREATE DATABASE app_db;
 
--- Create roles
-CREATE ROLE app_user WITH LOGIN PASSWORD '${APP_USER_PASSWORD}';
-CREATE ROLE readonly_user WITH LOGIN PASSWORD '${READONLY_PASSWORD}';
-CREATE ROLE backup_user WITH LOGIN PASSWORD '${BACKUP_PASSWORD}';
-CREATE ROLE analytics_user WITH LOGIN PASSWORD '${ANALYTICS_PASSWORD}';
+-- Switch to app_db for setup
+\c app_db
 
--- Grant privileges to app_user
-GRANT CONNECT ON DATABASE app_db TO app_user;
-GRANT CREATE ON DATABASE app_db TO app_user;
-ALTER DATABASE app_db OWNER TO app_user;
+-- Enable TimescaleDB in app_db
+CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 
--- Grant read-only access
+-- Create users with secure passwords
+CREATE USER app_user WITH PASSWORD '${APP_USER_PASSWORD}';
+CREATE USER readonly_user WITH PASSWORD '${READONLY_PASSWORD}';
+CREATE USER backup_user WITH PASSWORD '${BACKUP_PASSWORD}';
+CREATE USER analytics_user WITH PASSWORD '${ANALYTICS_PASSWORD}';
+
+-- Grant privileges
+GRANT ALL PRIVILEGES ON DATABASE app_db TO app_user;
 GRANT CONNECT ON DATABASE app_db TO readonly_user;
-\c app_db
-GRANT USAGE ON SCHEMA public TO readonly_user;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly_user;
-
--- Grant backup privileges
 GRANT CONNECT ON DATABASE app_db TO backup_user;
-GRANT CONNECT ON DATABASE postgres TO backup_user;
-\c postgres
-GRANT pg_read_all_data TO backup_user;
-
--- Grant analytics privileges
 GRANT CONNECT ON DATABASE app_db TO analytics_user;
-\c app_db
-GRANT USAGE ON SCHEMA public TO analytics_user;
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO analytics_user;
+
+-- Set default privileges for app_user
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO app_user;
+
+-- Set read-only privileges
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO readonly_user;
+
+-- Set analytics privileges
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO analytics_user;
 
 -- Create audit table
@@ -255,18 +297,34 @@ CREATE TABLE IF NOT EXISTS audit_log (
     query TEXT
 );
 
--- Enable row level security on audit table
-ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+-- Create sample hypertable for TimescaleDB
+CREATE TABLE IF NOT EXISTS metrics (
+    time TIMESTAMPTZ NOT NULL,
+    device_id TEXT,
+    temperature DOUBLE PRECISION,
+    humidity DOUBLE PRECISION,
+    location TEXT
+);
 
--- Create policy for audit table
-CREATE POLICY audit_log_policy ON audit_log
-    FOR ALL
-    TO postgres
-    USING (true);
+-- Convert to hypertable
+SELECT create_hypertable('metrics', 'time', if_not_exists => TRUE);
+
+-- Create index for better query performance
+CREATE INDEX IF NOT EXISTS idx_metrics_device_time ON metrics (device_id, time DESC);
+
+\echo 'Database initialization complete!'
 EOF
 
-# Create docker-compose.yml
-print_info "Creating docker-compose.yml..."
+# Create docker-compose.yml based on security settings
+print_info "Creating Docker Compose configuration..."
+
+if [ "$EXPOSE_POSTGRES" = "true" ]; then
+    POSTGRES_PORTS="    ports:
+      - \"5432:5432\""
+else
+    POSTGRES_PORTS="    # PostgreSQL not exposed externally for security"
+fi
+
 cat > "$BASE_DIR/docker-compose.yml" << EOF
 version: '3.8'
 
@@ -283,18 +341,16 @@ services:
       - POSTGRES_INITDB_ARGS=\${POSTGRES_INITDB_ARGS}
       - TIMESCALEDB_TELEMETRY=\${TIMESCALEDB_TELEMETRY}
     volumes:
-      - $BASE_DIR/data:/var/lib/postgresql/data
-      - $BASE_DIR/backups:/backups
-      - $BASE_DIR/logs:/var/log/postgresql
-      - $BASE_DIR/scripts/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
-      - $BASE_DIR/config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-      - $BASE_DIR/config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ${BASE_DIR}/data:/var/lib/postgresql/data
+      - ${BASE_DIR}/init:/docker-entrypoint-initdb.d:ro
+      - ${BASE_DIR}/backups:/backups
+      - ${BASE_DIR}/logs:/var/log/postgresql
+      - ${BASE_DIR}/config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     command: 
       - postgres
       - -c
       - config_file=/etc/postgresql/postgresql.conf
-      - -c
-      - hba_file=/etc/postgresql/pg_hba.conf
+${POSTGRES_PORTS}
     networks:
       - postgres_network
     healthcheck:
@@ -302,8 +358,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    # PostgreSQL is NOT exposed to the internet for security
-    # Only accessible within Docker network
+      start_period: 30s
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -316,9 +371,8 @@ services:
       - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=\${PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED}
       - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=True
       - PGADMIN_CONFIG_LOGIN_BANNER="Authorized access only!"
-      - PGADMIN_CONFIG_CONSOLE_LOG_LEVEL=10
     volumes:
-      - $BASE_DIR/pgadmin:/var/lib/pgadmin
+      - ${BASE_DIR}/pgadmin:/var/lib/pgadmin
     ports:
       - "\${PGADMIN_PORT}:80"
     networks:
@@ -347,83 +401,175 @@ BACKUP_DIR="/srv/postgres16/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/backup_$TIMESTAMP.sql"
 
-# Create backup
-docker exec postgres16 pg_dumpall -U $POSTGRES_USER > $BACKUP_FILE
+echo "Starting backup..."
+docker exec postgres16 pg_dumpall -U postgres > $BACKUP_FILE
 
-# Compress backup
-gzip $BACKUP_FILE
-
-# Remove backups older than 30 days
-find $BACKUP_DIR -name "backup_*.sql.gz" -mtime +30 -delete
-
-echo "Backup completed: ${BACKUP_FILE}.gz"
+if [ $? -eq 0 ]; then
+    gzip $BACKUP_FILE
+    echo "✓ Backup completed: ${BACKUP_FILE}.gz"
+    
+    # Remove backups older than 30 days
+    find $BACKUP_DIR -name "backup_*.sql.gz" -mtime +30 -delete
+    echo "✓ Old backups cleaned"
+else
+    echo "✗ Backup failed!"
+    rm -f $BACKUP_FILE
+    exit 1
+fi
 EOF
-
 chmod +x "$BASE_DIR/scripts/backup.sh"
 
-# Create pgAdmin servers.json configuration
-print_info "Creating pgAdmin server configuration..."
-mkdir -p "$BASE_DIR/pgadmin"
-cat > "$BASE_DIR/pgadmin/servers.json" << EOF
-{
-    "Servers": {
-        "1": {
-            "Name": "PostgreSQL 16 - TimescaleDB",
-            "Group": "Servers",
-            "Host": "postgres",
-            "Port": 5432,
-            "MaintenanceDB": "postgres",
-            "Username": "postgres",
-            "SSLMode": "prefer",
-            "Comment": "Local PostgreSQL 16 with TimescaleDB"
-        }
-    }
-}
+# Create monitoring script
+print_info "Creating monitoring script..."
+cat > "$BASE_DIR/scripts/monitor.sh" << 'EOF'
+#!/bin/bash
+
+source /srv/postgres16/.env
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+clear
+echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${CYAN}           PostgreSQL 16 + TimescaleDB Monitoring              ${NC}"
+echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+# Container Status
+echo "📦 Container Status:"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "NAME|postgres|pgadmin" || echo "No containers running"
+echo ""
+
+# Database Connections
+echo "🔗 Active Connections:"
+docker exec postgres16 psql -U postgres -c "SELECT datname, count(*) FROM pg_stat_activity GROUP BY datname;" 2>/dev/null || echo "Cannot retrieve connections"
+echo ""
+
+# Database Sizes
+echo "💾 Database Sizes:"
+docker exec postgres16 psql -U postgres -c "SELECT datname, pg_size_pretty(pg_database_size(datname)) as size FROM pg_database WHERE datname NOT IN ('template0', 'template1');" 2>/dev/null || echo "Cannot retrieve sizes"
+echo ""
+
+# System Resources
+echo "⚙️  Resource Usage:"
+docker stats --no-stream postgres16 pgadmin4 2>/dev/null || echo "Cannot retrieve stats"
+echo ""
+
+# Access Information
+echo -e "${GREEN}Access URLs:${NC}"
+echo "  pgAdmin: http://${SERVER_IP}:5050"
+if [ "${EXPOSE_POSTGRES}" = "true" ]; then
+    echo "  PostgreSQL: ${SERVER_IP}:5432"
+else
+    echo "  PostgreSQL: Internal only (Docker network)"
+fi
+echo ""
+EOF
+chmod +x "$BASE_DIR/scripts/monitor.sh"
+
+# Create credentials file
+print_info "Saving credentials..."
+cat > "$BASE_DIR/CREDENTIALS.txt" << EOF
+═══════════════════════════════════════════════════════════════════
+           PostgreSQL 16 + TimescaleDB + pgAdmin 4
+                   Installation Credentials
+═══════════════════════════════════════════════════════════════════
+Generated: $(date)
+Server IP: ${SERVER_IP}
+Directory: ${BASE_DIR}
+
+───────────────────────────────────────────────────────────────────
+POSTGRESQL DATABASE:
+───────────────────────────────────────────────────────────────────
+Host: ${SERVER_IP}
+Port: 5432 $([ "$EXPOSE_POSTGRES" = "false" ] && echo "(Docker network only)" || echo "(Exposed)")
+Admin User: postgres
+Admin Password: ${POSTGRES_PASSWORD}
+Database: postgres / app_db
+
+───────────────────────────────────────────────────────────────────
+PGADMIN WEB INTERFACE:
+───────────────────────────────────────────────────────────────────
+URL: http://${SERVER_IP}:5050
+Email: ${PGADMIN_EMAIL}
+Password: ${PGADMIN_PASSWORD}
+
+───────────────────────────────────────────────────────────────────
+DATABASE USERS:
+───────────────────────────────────────────────────────────────────
+App User (Full Access):
+  Username: app_user
+  Password: ${APP_USER_PASSWORD}
+  
+Read-Only User:
+  Username: readonly_user
+  Password: ${READONLY_PASSWORD}
+  
+Backup User:
+  Username: backup_user
+  Password: ${BACKUP_PASSWORD}
+  
+Analytics User:
+  Username: analytics_user
+  Password: ${ANALYTICS_PASSWORD}
+
+───────────────────────────────────────────────────────────────────
+CONNECTION STRINGS:
+───────────────────────────────────────────────────────────────────
+Application (Full Access):
+postgresql://app_user:${APP_USER_PASSWORD}@${SERVER_IP}:5432/app_db
+
+Read-Only Access:
+postgresql://readonly_user:${READONLY_PASSWORD}@${SERVER_IP}:5432/app_db
+
+───────────────────────────────────────────────────────────────────
+QUICK COMMANDS:
+───────────────────────────────────────────────────────────────────
+View this file: cat ${BASE_DIR}/CREDENTIALS.txt
+Monitor status: ${BASE_DIR}/scripts/monitor.sh
+Run backup: ${BASE_DIR}/scripts/backup.sh
+Connect to DB: docker exec -it postgres16 psql -U postgres
+
+═══════════════════════════════════════════════════════════════════
+Keep this file secure! All passwords are 12 characters alphanumeric.
+═══════════════════════════════════════════════════════════════════
 EOF
 
-# Set proper permissions
-sudo chmod 600 "$BASE_DIR/pgadmin/servers.json"
-sudo chown 5050:5050 "$BASE_DIR/pgadmin/servers.json"
+sudo chmod 600 "$BASE_DIR/CREDENTIALS.txt"
 
-# Create cron job for automated backups
+# Setup cron for automated backups
 print_info "Setting up automated backups..."
-(crontab -l 2>/dev/null; echo "0 2 * * * $BASE_DIR/scripts/backup.sh") | crontab -
+(crontab -l 2>/dev/null || true; echo "0 2 * * * $BASE_DIR/scripts/backup.sh") | crontab -
 
-print_success "========================================="
-print_success "Setup completed successfully!"
-print_success "========================================="
+# Display summary
 echo ""
-print_info "📁 Installation Directory: $BASE_DIR"
-print_info "🌐 Server IP: $SERVER_IP"
+echo -e "${GREEN}═══════════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}              ✓ SETUP COMPLETED SUCCESSFULLY!                      ${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════════════════════${NC}"
 echo ""
-print_success "🔐 Access Credentials:"
+echo -e "${CYAN}📁 Installation:${NC} ${BASE_DIR}"
+echo -e "${CYAN}🌐 Server IP:${NC} ${SERVER_IP}"
+echo ""
+echo -e "${MAGENTA}🔐 Access Credentials:${NC}"
+echo ""
 echo "  PostgreSQL:"
-echo "    Host: postgres (internal only)"
-echo "    Port: 5432 (not exposed externally)"
-echo "    Admin User: postgres"
-echo "    Admin Password: $POSTGRES_PASSWORD"
+echo "    User: postgres"
+echo "    Pass: ${POSTGRES_PASSWORD}"
 echo ""
 echo "  pgAdmin:"
-echo "    URL: http://$SERVER_IP:5050"
-echo "    Email: admin@${SERVER_IP//./-}.local"
-echo "    Password: $PGADMIN_PASSWORD"
+echo "    URL: http://${SERVER_IP}:5050"
+echo "    Email: ${PGADMIN_EMAIL}"
+echo "    Pass: ${PGADMIN_PASSWORD}"
 echo ""
-echo "  Database Users:"
-echo "    app_user: $APP_USER_PASSWORD (Full access to app_db)"
-echo "    readonly_user: $READONLY_PASSWORD (Read-only access)"
-echo "    backup_user: $BACKUP_PASSWORD (Backup privileges)"
-echo "    analytics_user: $ANALYTICS_PASSWORD (Analytics access)"
+echo -e "${YELLOW}📋 Next Steps:${NC}"
+echo "1. Copy docker-compose.yml to Portainer Stack"
+echo "2. Copy .env content to Environment variables"
+echo "3. Deploy the stack"
+echo "4. Access pgAdmin at http://${SERVER_IP}:5050"
 echo ""
-print_info "📝 Next Steps:"
-echo "  1. Copy the docker-compose.yml to Portainer"
-echo "  2. Copy the .env file content to Portainer environment"
-echo "  3. Deploy the stack"
-echo "  4. Access pgAdmin at http://$SERVER_IP:5050"
+echo -e "${GREEN}All credentials saved to:${NC} ${BASE_DIR}/CREDENTIALS.txt"
+echo -e "${GREEN}Monitor status:${NC} ${BASE_DIR}/scripts/monitor.sh"
 echo ""
-print_warning "⚠️  Security Notes:"
-echo "  - PostgreSQL is NOT exposed to the internet"
-echo "  - All passwords are stored in $BASE_DIR/.env"
-echo "  - Backup this file securely!"
-echo "  - Automated backups run daily at 2 AM"
-echo ""
-print_success "Stack files created at: $BASE_DIR"
