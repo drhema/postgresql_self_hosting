@@ -102,6 +102,10 @@ PGADMIN_PORT=5050
 TIMESCALEDB_TELEMETRY=off
 POSTGRES_HOST_AUTH_METHOD=scram-sha-256
 POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=scram-sha-256
+# Security - IP Whitelist (comma-separated) (Optional)
+ALLOWED_IPS=192.168.1.100,203.0.113.45,10.0.0.5
+POSTGRES_LISTEN_ADDRESSES=localhost,192.168.1.100,203.0.113.45,10.0.0.5
+
 ```
 
 ---
